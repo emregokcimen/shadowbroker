@@ -1,0 +1,158 @@
+name: Deploy Docker Host
+
+on:
+  workflow_run:
+    workflows: ["Docker Publish"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: shadowbroker-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  deploy:
+    name: Deploy full stack
+    if: vars.DEPLOY_URL != '' && (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ vars.DEPLOY_URL }}
+
+    steps:
+      - name: Validate deployment configuration
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_URL: ${{ vars.DEPLOY_URL }}
+        run: |
+          test -n "$DEPLOY_HOST" || { echo "DEPLOY_HOST secret is required"; exit 1; }
+          test -n "$DEPLOY_USER" || { echo "DEPLOY_USER secret is required"; exit 1; }
+          test -n "$DEPLOY_SSH_KEY" || { echo "DEPLOY_SSH_KEY secret is required"; exit 1; }
+          test -n "$DEPLOY_URL" || { echo "DEPLOY_URL repository variable is required"; exit 1; }
+
+      - name: Configure SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+
+      - name: Deploy with Docker Compose
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ vars.DEPLOY_PATH || '/opt/shadowbroker' }}
+          DEPLOY_BIND: ${{ vars.DEPLOY_BIND || '0.0.0.0' }}
+          DEPLOY_URL: ${{ vars.DEPLOY_URL }}
+          ADMIN_KEY: ${{ secrets.ADMIN_KEY }}
+          AIS_API_KEY: ${{ secrets.AIS_API_KEY }}
+          OPENSKY_CLIENT_ID: ${{ secrets.OPENSKY_CLIENT_ID }}
+          OPENSKY_CLIENT_SECRET: ${{ secrets.OPENSKY_CLIENT_SECRET }}
+          LTA_ACCOUNT_KEY: ${{ secrets.LTA_ACCOUNT_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          MESH_PEER_PUSH_SECRET: ${{ secrets.MESH_PEER_PUSH_SECRET }}
+          MESH_MQTT_PASS: ${{ secrets.MESH_MQTT_PASS }}
+        run: |
+          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_PATH'"
+          cat > /tmp/shadowbroker-compose.yml <<'YAML'
+          services:
+            backend:
+              image: ghcr.io/emregokcimen/shadowbroker-backend:latest
+              container_name: shadowbroker-backend
+              ports:
+                - "${BIND:-0.0.0.0}:${BACKEND_PORT:-8000}:8000"
+              environment:
+                - AIS_API_KEY=${AIS_API_KEY:-}
+                - OPENSKY_CLIENT_ID=${OPENSKY_CLIENT_ID:-}
+                - OPENSKY_CLIENT_SECRET=${OPENSKY_CLIENT_SECRET:-}
+                - LTA_ACCOUNT_KEY=${LTA_ACCOUNT_KEY:-}
+                - ADMIN_KEY=${ADMIN_KEY:-}
+                - FINNHUB_API_KEY=${FINNHUB_API_KEY:-}
+                - CORS_ORIGINS=${CORS_ORIGINS:-}
+                - MESH_BOOTSTRAP_SEED_PEERS=${MESH_BOOTSTRAP_SEED_PEERS:-http://gqpbunqbgtkcqilvclm3xrkt3zowjyl3s62kkktvojgvxzizamvbrqid.onion:8000}
+                - MESH_DEFAULT_SYNC_PEERS=${MESH_DEFAULT_SYNC_PEERS:-}
+                - MESH_RELAY_PEERS=${MESH_RELAY_PEERS:-}
+                - MESH_PEER_PUSH_SECRET=${MESH_PEER_PUSH_SECRET:-}
+                - MESH_MQTT_ENABLED=${MESH_MQTT_ENABLED:-false}
+                - MESH_MQTT_BROKER=${MESH_MQTT_BROKER:-mqtt.meshtastic.org}
+                - MESH_MQTT_PORT=${MESH_MQTT_PORT:-1883}
+                - MESH_MQTT_USER=${MESH_MQTT_USER:-meshdev}
+                - MESH_MQTT_PASS=${MESH_MQTT_PASS:-}
+                - MESH_MQTT_PSK=${MESH_MQTT_PSK:-}
+                - MESH_MQTT_INCLUDE_DEFAULT_ROOTS=${MESH_MQTT_INCLUDE_DEFAULT_ROOTS:-true}
+                - MESH_MQTT_EXTRA_ROOTS=${MESH_MQTT_EXTRA_ROOTS:-}
+                - MESH_MQTT_EXTRA_TOPICS=${MESH_MQTT_EXTRA_TOPICS:-}
+                - MESHTASTIC_OPERATOR_CALLSIGN=${MESHTASTIC_OPERATOR_CALLSIGN:-}
+                - SHADOWBROKER_TRUST_DOCKER_BRIDGE_LOCAL_OPERATOR=1
+              volumes:
+                - backend_data:/app/data
+              restart: unless-stopped
+              healthcheck:
+                test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+                interval: 15s
+                timeout: 10s
+                retries: 5
+                start_period: 60s
+
+            frontend:
+              image: ghcr.io/emregokcimen/shadowbroker-frontend:latest
+              container_name: shadowbroker-frontend
+              ports:
+                - "${BIND:-0.0.0.0}:${FRONTEND_PORT:-3000}:3000"
+              environment:
+                - BACKEND_URL=http://backend:8000
+                - ADMIN_KEY=${ADMIN_KEY:-}
+              depends_on:
+                backend:
+                  condition: service_healthy
+              restart: unless-stopped
+              healthcheck:
+                test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000/"]
+                interval: 30s
+                timeout: 10s
+                retries: 3
+                start_period: 20s
+
+          volumes:
+            backend_data:
+          YAML
+          cat > /tmp/shadowbroker.env <<EOF
+          BIND=$DEPLOY_BIND
+          FRONTEND_PORT=3000
+          BACKEND_PORT=8000
+          CORS_ORIGINS=$DEPLOY_URL
+          ADMIN_KEY=$ADMIN_KEY
+          AIS_API_KEY=$AIS_API_KEY
+          OPENSKY_CLIENT_ID=$OPENSKY_CLIENT_ID
+          OPENSKY_CLIENT_SECRET=$OPENSKY_CLIENT_SECRET
+          LTA_ACCOUNT_KEY=$LTA_ACCOUNT_KEY
+          FINNHUB_API_KEY=$FINNHUB_API_KEY
+          MESH_PEER_PUSH_SECRET=$MESH_PEER_PUSH_SECRET
+          MESH_MQTT_PASS=$MESH_MQTT_PASS
+          EOF
+          scp -i ~/.ssh/deploy_key /tmp/shadowbroker-compose.yml "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/docker-compose.yml"
+          scp -i ~/.ssh/deploy_key /tmp/shadowbroker.env "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/.env"
+          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "cd '$DEPLOY_PATH' && docker compose pull && docker compose up -d && docker compose ps"
+
+      - name: Verify public frontend
+        env:
+          DEPLOY_URL: ${{ vars.DEPLOY_URL }}
+        run: |
+          curl --fail --show-error --location --max-time 30 "$DEPLOY_URL"
+
+      - name: Verify backend health through host
+        env:
+          DEPLOY_URL: ${{ vars.DEPLOY_URL }}
+        run: |
+          curl --fail --show-error --location --max-time 30 "$DEPLOY_URL/api/health"
