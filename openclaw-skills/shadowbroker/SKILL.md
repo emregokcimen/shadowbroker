@@ -37,7 +37,18 @@ SHADOWBROKER_HMAC_SECRET=your-hmac-secret-here
 ```
 
 The HMAC secret is found in ShadowBroker's **Connect OpenClaw** modal (AI Intel panel).
-All requests are automatically signed with HMAC-SHA256 (timestamp + nonce + body digest) for replay protection and request-body integrity binding.
+`SHADOWBROKER_HMAC_SECRET` is a shared signing secret, not a raw API key. Do not
+send it as `X-Admin-Key`, `Authorization: Bearer`, a query parameter, or any
+plain request header. The `ShadowBrokerClient` signs every direct request with
+`X-SB-Timestamp`, `X-SB-Nonce`, and `X-SB-Signature` using:
+
+```text
+HMAC-SHA256(secret, METHOD|path|timestamp|nonce|sha256(body))
+```
+
+For compatibility with older snippets, `SHADOWBROKER_KEY` is also accepted by
+the client as the same HMAC signing secret. Prefer `SHADOWBROKER_HMAC_SECRET`
+for new setups.
 
 ### SSE Stream (Preferred — Low-Latency Push)
 

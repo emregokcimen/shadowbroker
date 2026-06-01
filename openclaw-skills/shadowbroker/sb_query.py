@@ -5,6 +5,9 @@ the ShadowBroker OSINT platform.
 
 For local access (same machine), no authentication is needed.
 For remote access, set SHADOWBROKER_HMAC_SECRET to enable HMAC-signed requests.
+Older ShadowBroker UI snippets used SHADOWBROKER_KEY; this client still accepts
+that value as an HMAC signing secret for compatibility. Never send either value
+as a raw bearer token, X-Admin-Key, query parameter, or unsigned header.
 
 Usage (inside an OpenClaw skill):
     from sb_query import ShadowBrokerClient
@@ -43,11 +46,17 @@ class ShadowBrokerClient:
 
     Supports both local (no auth) and remote (HMAC-signed) connections.
     Set SHADOWBROKER_HMAC_SECRET env var to enable remote authentication.
+    SHADOWBROKER_KEY is accepted only as a backwards-compatible HMAC-secret
+    alias for older copy snippets.
     """
 
     def __init__(self, base_url: str = SB_BASE, hmac_secret: str = ""):
         self.base = base_url.rstrip("/")
-        self._hmac_secret = hmac_secret or os.environ.get("SHADOWBROKER_HMAC_SECRET", "")
+        self._hmac_secret = (
+            hmac_secret
+            or os.environ.get("SHADOWBROKER_HMAC_SECRET", "")
+            or os.environ.get("SHADOWBROKER_KEY", "")
+        )
         self._client = None
         # Version tracking for incremental updates
         self._last_data_version: int | None = None

@@ -74,17 +74,18 @@ import {
   Trash2,
   RotateCcw,
   Satellite,
-  Eye,
-  EyeOff,
   Copy,
   Check,
   Radar,
 } from 'lucide-react';
 import {
-  clearSentinelCredentials,
-  getSentinelCredentialStorageMode,
-  getSentinelCredentials,
-  setSentinelCredentials,
+  // Issue #298: Sentinel credentials now live server-side. The legacy
+  // browser-storage helpers (getSentinelCredentials / setSentinelCredentials
+  // / clearSentinelCredentials / getSentinelCredentialStorageMode) have
+  // been removed from sentinelHub.ts. We use the new status check + the
+  // one-time migration helper instead.
+  checkBackendSentinelStatus,
+  migrateLegacySentinelBrowserKeys,
 } from '@/lib/sentinelHub';
 import {
   getPrivacyProfilePreference,
@@ -95,6 +96,7 @@ import {
   setPrivacyStrictPreference,
   setSessionModePreference,
 } from '@/lib/privacyBrowserStorage';
+import { useTranslation, LOCALES, type Locale } from '@/i18n';
 
 interface ApiEntry {
   id: string;
@@ -142,10 +144,14 @@ const WEIGHT_COLORS: Record<number, string> = {
 const SETTINGS_FOCUS_KEY = 'sb_settings_focus';
 const WORMHOLE_RETURN_KEY = 'sb_wormhole_return_target';
 const WORMHOLE_READY_EVENT = 'sb:wormhole-ready';
+// Issue #298 (tg12): Sentinel credentials moved from browser storage to
+// the backend ``.env`` (managed through the API Keys panel). The legacy
+// keys (``sb_sentinel_client_id`` / ``sb_sentinel_client_secret`` /
+// ``sb_sentinel_instance_id``) are no longer treated as sensitive
+// browser state because they are no longer written. ``SentinelTab``
+// runs ``migrateLegacySentinelBrowserKeys()`` once on mount to clear
+// any leftover values from pre-#298 installs.
 const PRIVACY_SENSITIVE_BROWSER_KEYS = [
-  'sb_sentinel_client_id',
-  'sb_sentinel_client_secret',
-  'sb_sentinel_instance_id',
   'sb_infonet_head',
   'sb_infonet_head_history',
   'sb_infonet_peers',
@@ -245,6 +251,7 @@ const SettingsPanel = React.memo(function SettingsPanel({
   // settings are authenticated through Rust-side admin-key ownership. The
   // browser admin-session flow is unnecessary and unavailable in packaged mode.
   const nativeProtected = isNativeProtectedSettingsReady();
+  const { t, locale, setLocale } = useTranslation();
 
   // --- Admin Key (for protected endpoints) ---
   const [adminKey, setAdminKey] = useState('');
@@ -1127,19 +1134,47 @@ const SettingsPanel = React.memo(function SettingsPanel({
                 </div>
                 <div>
                   <h2 className="text-sm font-bold tracking-[0.2em] text-[var(--text-primary)] font-mono">
-                    SYSTEM CONFIG
+                    {t('settings.title').toUpperCase()}
                   </h2>
                   <span className="text-[13px] text-[var(--text-muted)] font-mono tracking-widest">
                     SETTINGS &amp; DATA SOURCES
                   </span>
                 </div>
               </div>
-              <button
-                onClick={onClose}
-                className="w-8 h-8 border border-[var(--border-primary)] hover:border-red-500/50 flex items-center justify-center text-[var(--text-muted)] hover:text-red-400 transition-all hover:bg-red-950/20"
-              >
-                <X size={14} />
-              </button>
+              <div className="flex items-center gap-2">
+                {/*
+                  UI language toggle. Locale change is purely client-side
+                  (persists to localStorage('sb_locale')) — no network call,
+                  no telemetry. See frontend/src/i18n/index.ts for the list
+                  of available locales and CONTRIBUTING.md for the
+                  translation-neutrality policy.
+                */}
+                <label
+                  htmlFor="sb-locale-select"
+                  className="text-[11px] tracking-[0.18em] uppercase text-[var(--text-muted)] font-mono"
+                >
+                  LANG
+                </label>
+                <select
+                  id="sb-locale-select"
+                  value={locale}
+                  onChange={(e) => setLocale(e.target.value as Locale)}
+                  aria-label="UI language"
+                  className="h-8 px-2 border border-[var(--border-primary)] bg-[var(--bg-primary)]/60 text-[12px] font-mono text-[var(--text-secondary)] tracking-wider hover:border-cyan-500/50 focus:outline-none focus:border-cyan-500/80 transition-colors"
+                >
+                  {LOCALES.map((entry) => (
+                    <option key={entry.code} value={entry.code}>
+                      {entry.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={onClose}
+                  className="w-8 h-8 border border-[var(--border-primary)] hover:border-red-500/50 flex items-center justify-center text-[var(--text-muted)] hover:text-red-400 transition-all hover:bg-red-950/20"
+                >
+                  <X size={14} />
+                </button>
+              </div>
             </div>
 
             {/* Operator Tools */}
@@ -1273,14 +1308,14 @@ const SettingsPanel = React.memo(function SettingsPanel({
                 className={`flex-1 px-4 py-2.5 text-sm font-mono tracking-widest font-bold transition-colors flex items-center justify-center gap-1.5 ${activeTab === 'api-keys' ? 'text-cyan-400 border-b-2 border-cyan-500 bg-cyan-950/10' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}`}
               >
                 <Key size={10} />
-                API KEYS
+                {t('settings.general').toUpperCase()}
               </button>
               <button
                 onClick={() => setActiveTab('news-feeds')}
                 className={`flex-1 px-4 py-2.5 text-sm font-mono tracking-widest font-bold transition-colors flex items-center justify-center gap-1.5 ${activeTab === 'news-feeds' ? 'text-orange-400 border-b-2 border-orange-500 bg-orange-950/10' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}`}
               >
                 <Rss size={10} />
-                NEWS FEEDS
+                {t('settings.feeds').toUpperCase()}
                 {feedsDirty && (
                   <span className="w-1.5 h-1.5 rounded-full bg-orange-400 animate-pulse" />
                 )}
@@ -1297,14 +1332,14 @@ const SettingsPanel = React.memo(function SettingsPanel({
                 className={`flex-1 px-4 py-2.5 text-sm font-mono tracking-widest font-bold transition-colors flex items-center justify-center gap-1.5 ${activeTab === 'sar' ? 'text-amber-400 border-b-2 border-amber-500 bg-amber-950/10' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}`}
               >
                 <Radar size={10} />
-                SAR
+                {t('settings.sar').toUpperCase()}
               </button>
               <button
                 onClick={() => setActiveTab('protocol')}
                 className={`flex-1 px-4 py-2.5 text-sm font-mono tracking-widest font-bold transition-colors flex items-center justify-center gap-1.5 ${activeTab === 'protocol' ? 'text-green-400 border-b-2 border-green-500 bg-green-950/10' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'}`}
               >
                 <Shield size={10} />
-                MESH
+                {t('settings.infonet').toUpperCase()}
               </button>
             </div>
 
@@ -2585,7 +2620,9 @@ const SettingsPanel = React.memo(function SettingsPanel({
             )}
 
             {/* ==================== SENTINEL HUB TAB ==================== */}
-            {activeTab === 'sentinel' && <SentinelTab />}
+            {activeTab === 'sentinel' && (
+              <SentinelTab onGoToApiKeys={() => setActiveTab('api-keys')} />
+            )}
             {activeTab === 'sar' && <SarSettingsTab />}
           </motion.div>
         </>
@@ -2595,63 +2632,58 @@ const SettingsPanel = React.memo(function SettingsPanel({
 });
 
 // ─── Sentinel Hub Settings Tab ─────────────────────────────────────────────
-function SentinelTab() {
-  const [clientId, setClientId] = useState(() => getSentinelCredentials().clientId);
-  const [clientSecret, setClientSecret] = useState(() => getSentinelCredentials().clientSecret);
-  const [testing, setTesting] = useState(false);
-  const [status, setStatus] = useState<{ ok: boolean; msg: string } | null>(null);
-  const [dirty, setDirty] = useState(false);
-  const [showSecret, setShowSecret] = useState(false);
-  const storageMode = getSentinelCredentialStorageMode();
+// Issue #298 (tg12): Sentinel credentials now live in the backend ``.env``
+// and are managed through the existing API Keys panel — same flow as every
+// other third-party API key (OpenSky, AIS Stream, Finnhub, …). This tab no
+// longer collects credentials. It does three things:
+//   1. Runs migrateLegacySentinelBrowserKeys() once to wipe pre-#298
+//      values out of localStorage / sessionStorage.
+//   2. Shows the operator whether the backend has the credentials.
+//   3. Offers a one-click jump to the API Keys panel where they enter them.
+function SentinelTab({ onGoToApiKeys }: { onGoToApiKeys: () => void }) {
+  const [backendConfigured, setBackendConfigured] = useState<boolean | null>(null);
+  const [migrationResult, setMigrationResult] = useState<{ cleared: string[] } | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
-  const save = () => {
-    setSentinelCredentials(clientId.trim(), clientSecret.trim());
-    setDirty(false);
-    setStatus({
-      ok: true,
-      msg: `Credentials saved to browser ${storageMode === 'session' ? 'session' : 'local'} storage.`,
-    });
-  };
+  useEffect(() => {
+    // One-time legacy browser-key wipe. Idempotent — does nothing on a
+    // fresh install. We do NOT silently POST any browser-stored values
+    // to the backend; operators who relied on them re-enter once in the
+    // API Keys panel. Doing the wipe regardless ensures pre-#298 secrets
+    // don't linger in localStorage indefinitely.
+    setMigrationResult(migrateLegacySentinelBrowserKeys());
 
-  const testConnection = async () => {
-    setTesting(true);
-    setStatus(null);
+    // Check whether the backend has SENTINEL_CLIENT_ID/SECRET set.
+    void checkBackendSentinelStatus().then(setBackendConfigured);
+  }, []);
+
+  const refresh = async () => {
+    setRefreshing(true);
     try {
-      const resp = await fetch(`${API_BASE}/api/sentinel/token`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          client_id: clientId.trim(),
-          client_secret: clientSecret.trim(),
-        }),
-      });
-      if (resp.ok) {
-        setStatus({ ok: true, msg: 'Connected — token acquired successfully.' });
-      } else {
-        const text = await resp.text().catch(() => '');
-        setStatus({ ok: false, msg: `Auth failed (${resp.status}): ${text.slice(0, 120)}` });
-      }
-    } catch (err) {
-      const msg =
-        typeof err === 'object' && err !== null && 'message' in err
-          ? String((err as { message?: string }).message)
-          : 'unknown';
-      setStatus({ ok: false, msg: `Network error: ${msg}` });
+      // refreshSentinelStatus() invalidates the module-level cache so the
+      // next check actually hits the backend instead of returning the
+      // memoized value. Lazy-imported so SSR/tests don't choke.
+      const { refreshSentinelStatus } = await import('@/lib/sentinelHub');
+      refreshSentinelStatus();
+      const ok = await checkBackendSentinelStatus();
+      setBackendConfigured(ok);
     } finally {
-      setTesting(false);
+      setRefreshing(false);
     }
   };
 
-  const clear = () => {
-    clearSentinelCredentials();
-    setClientId('');
-    setClientSecret('');
-    setDirty(false);
-    setStatus({ ok: true, msg: 'Credentials cleared.' });
-  };
-
-  const inputCls =
-    'w-full bg-[var(--bg-primary)]/60 border border-[var(--border-primary)] px-3 py-2 text-[11px] font-mono text-[var(--text-secondary)] outline-none focus:border-purple-500 placeholder:text-[var(--text-muted)]/50 transition-colors';
+  const statusColor =
+    backendConfigured === null
+      ? 'text-[var(--text-muted)]'
+      : backendConfigured
+      ? 'text-green-400'
+      : 'text-yellow-400';
+  const statusLabel =
+    backendConfigured === null
+      ? 'CHECKING…'
+      : backendConfigured
+      ? 'CONFIGURED ON BACKEND'
+      : 'NOT CONFIGURED';
 
   return (
     <div className="flex-1 flex flex-col overflow-y-auto styled-scrollbar">
@@ -2703,106 +2735,73 @@ function SentinelTab() {
               </p>
               <p>
                 <span className="text-purple-400 font-bold">STEP 3:</span>{' '}
-                Paste both values in the fields below, hit{' '}
-                <span className="text-cyan-400">SAVE</span>, then{' '}
-                <span className="text-cyan-400">TEST CONNECTION</span> to verify.
-                That&apos;s it!
+                Paste both values into the <span className="text-cyan-400">API Keys</span> panel
+                under <span className="text-white">SENTINEL_CLIENT_ID</span> and{' '}
+                <span className="text-white">SENTINEL_CLIENT_SECRET</span>, then hit Save.
+                The backend uses them to mint short-lived tokens — your browser never sees
+                the secret again.
               </p>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Credential Inputs */}
-      <div className="p-4 space-y-3">
-        <div>
-          <label className="text-[13px] font-mono text-[var(--text-muted)] tracking-widest mb-1 block">
-            CLIENT ID
-          </label>
-          <input
-            type="text"
-            value={clientId}
-            onChange={(e) => {
-              setClientId(e.target.value);
-              setDirty(true);
-            }}
-            placeholder="sh-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-            spellCheck={false}
-            autoComplete="off"
-            className={inputCls}
-          />
+      {/* Backend status */}
+      <div className="mx-4 mt-3 p-3 border border-[var(--border-primary)] bg-[var(--bg-primary)]/30">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-[13px] font-mono text-[var(--text-muted)] tracking-widest">
+            BACKEND STATUS
+          </span>
+          <span className={`text-[11px] font-mono font-bold ${statusColor}`}>
+            {statusLabel}
+          </span>
         </div>
-        <div>
-          <label className="text-[13px] font-mono text-[var(--text-muted)] tracking-widest mb-1 block">
-            CLIENT SECRET
-          </label>
-          <input
-            type={showSecret ? 'text' : 'password'}
-            value={clientSecret}
-            onChange={(e) => {
-              setClientSecret(e.target.value);
-              setDirty(true);
-            }}
-            placeholder="Paste client secret here..."
-            spellCheck={false}
-            autoComplete="new-password"
-            className={inputCls}
-          />
+        <p className="text-[13px] text-[var(--text-muted)] font-mono leading-relaxed">
+          {backendConfigured === false
+            ? 'Sentinel credentials are not yet set in the backend .env. Open the API Keys panel to enter them — the tile overlay and Sentinel-2 Intel Card will work as soon as both fields are saved.'
+            : backendConfigured === true
+            ? 'Sentinel credentials are configured on the backend. The dashboard fetches tokens automatically; your browser does not handle the secret.'
+            : 'Checking backend configuration…'}
+        </p>
+        <div className="mt-3 flex items-center gap-2">
           <button
-            type="button"
-            onClick={() => setShowSecret((current) => !current)}
-            className="mt-2 inline-flex items-center gap-1.5 text-[13px] font-mono text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors"
+            onClick={onGoToApiKeys}
+            className="flex-1 px-4 py-2 bg-purple-500/20 border border-purple-500/40 text-purple-400 hover:bg-purple-500/30 transition-colors text-sm font-mono flex items-center justify-center gap-1.5"
           >
-            {showSecret ? <EyeOff size={10} /> : <Eye size={10} />}
-            {showSecret ? 'HIDE SECRET' : 'SHOW SECRET'}
+            OPEN API KEYS PANEL
+          </button>
+          <button
+            onClick={refresh}
+            disabled={refreshing}
+            className="px-3 py-2 border border-[var(--border-primary)] text-[var(--text-muted)] hover:text-cyan-400 hover:border-cyan-500/50 transition-all text-sm font-mono disabled:opacity-40"
+            title="Re-check backend status"
+          >
+            {refreshing ? 'CHECKING…' : 'REFRESH'}
           </button>
         </div>
       </div>
 
-      {/* Status */}
-      {status && (
-        <div
-          className={`mx-4 mb-2 px-3 py-2 text-sm font-mono ${status.ok ? 'text-green-400 bg-green-950/20 border border-green-900/30' : 'text-red-400 bg-red-950/20 border border-red-900/30'}`}
-        >
-          {status.msg}
+      {/* Migration notice (only if we actually cleared anything) */}
+      {migrationResult && migrationResult.cleared.length > 0 && (
+        <div className="mx-4 mt-3 px-3 py-2 text-sm font-mono text-cyan-400 bg-cyan-950/20 border border-cyan-900/30">
+          <p className="font-bold mb-1">LEGACY BROWSER CREDENTIALS CLEARED</p>
+          <p className="text-[13px] leading-relaxed text-[var(--text-muted)]">
+            Found and removed pre-#298 Sentinel credentials from browser storage
+            ({migrationResult.cleared.join(', ')}). Re-enter them in the API Keys panel
+            above; they&apos;ll be stored server-side from now on and never sent back to
+            the browser.
+          </p>
         </div>
       )}
 
-      {/* Actions */}
+      {/* Footer + Usage Meter */}
       <div className="p-4 border-t border-[var(--border-primary)]/80 mt-auto">
-        <div className="flex items-center gap-2">
-          <button
-            onClick={save}
-            disabled={!dirty}
-            className="flex-1 px-4 py-2 bg-purple-500/20 border border-purple-500/40 text-purple-400 hover:bg-purple-500/30 transition-colors text-sm font-mono flex items-center justify-center gap-1.5 disabled:opacity-30 disabled:cursor-not-allowed"
-          >
-            <Save size={10} />
-            SAVE
-          </button>
-          <button
-            onClick={testConnection}
-            disabled={testing || !clientId || !clientSecret}
-            className="flex-1 px-4 py-2 bg-cyan-500/20 border border-cyan-500/40 text-cyan-400 hover:bg-cyan-500/30 transition-colors text-sm font-mono flex items-center justify-center gap-1.5 disabled:opacity-30 disabled:cursor-not-allowed"
-          >
-            {testing ? 'TESTING...' : 'TEST CONNECTION'}
-          </button>
-          <button
-            onClick={clear}
-            className="px-3 py-2 border border-[var(--border-primary)] text-[var(--text-muted)] hover:text-red-400 hover:border-red-500/50 hover:bg-red-950/10 transition-all text-sm font-mono flex items-center gap-1.5"
-            title="Clear credentials"
-          >
-            <Trash2 size={10} />
-          </button>
-        </div>
-        {/* Usage Meter */}
         <UsageMeter />
-
         <div className="mt-2 p-2 border border-[var(--border-primary)]/40 bg-[var(--bg-primary)]/30">
           <p className="text-[13px] text-[var(--text-muted)] font-mono leading-relaxed">
-            Credentials stay in browser-only storage and never touch ShadowBroker servers.
-            {storageMode === 'session'
-              ? ' Current privacy mode keeps them in session storage only.'
-              : ' Current privacy mode keeps them in local storage for persistence.'}
+            Credentials are stored in the backend <span className="text-cyan-400">.env</span>{' '}
+            and never sent to the browser. The tile proxy mints short-lived OAuth tokens
+            on demand using those values.
           </p>
         </div>
       </div>
